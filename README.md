@@ -101,7 +101,7 @@ url.c           URL parser
 utils.c         Utility functions
 ```
 
-## Benchmark
+## Test
 
 A simple benchmark script is included to compare download performance.
 
