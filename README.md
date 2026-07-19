@@ -108,13 +108,13 @@ A simple benchmark script is included to compare download performance.
 Run a single large download:
 
 ```bash
-python3 benchmark.py
+python3 test.py
 ```
 
 Run multiple concurrent downloads:
 
 ```bash
-python3 benchmark.py --many-files
+python3 test.py --many-files
 ```
 
 The script will:
@@ -138,7 +138,7 @@ Useful options:
 Example:
 
 ```bash
-python3 benchmark.py --many-files --not-delete-files
+python3 test.py --many-files --not-delete-files
 ```
 
 Example output:
