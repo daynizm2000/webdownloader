@@ -35,7 +35,7 @@ static webd_errno_t webd_conn_setup(struct webdownloader *webd,
 
 
         if (epoll_ctl(webd->epfd, EPOLL_CTL_ADD, conn->eventfd, &ev) < 0) {
-                webd_conn_destroy(conn);
+                webd_conn_destroy(conn, WEBD_CONN_DESTROY_DELETE_FILE);
                 webd_uwarn_ret(webd_str_data(init_ctx->url), WEBD_FAILURE, "Failed to add the connection to the event pool\n");
         }
 
@@ -157,7 +157,7 @@ webd_errno_t webd_accept_step_status(struct webdownloader *webd, struct webd_con
                         webd_ulog(webd_str_data(strobj_url), "Server address changed to %s\n", webd_str_data(strobj_url));
 
 
-                        webd_conn_destroy(conn);
+                        webd_conn_destroy(conn, WEBD_CONN_DESTROY_DELETE_FILE);
 
 
                         init_ctx.ssl_ctx = webd->ssl_ctx;
@@ -246,7 +246,7 @@ webd_errno_t webd_event_loop(struct webdownloader *webd)
                                         (out_ev->events & (EPOLLERR | EPOLLHUP)) ? "EPOLLERR EPOLLHUP" :
                                         (out_ev->events & EPOLLERR) ? "EPOLLERR" : "EPOLLHUP");
 
-                                webd_conn_destroy(conn);
+                                webd_conn_destroy(conn, WEBD_CONN_DESTROY_DELETE_FILE);
                                 closed++;
 
                                 continue;
@@ -261,10 +261,11 @@ webd_errno_t webd_event_loop(struct webdownloader *webd)
                                         ret = webd_accept_step_status(webd, conn, ret);
 
 
-                                        if (ret == WEBD_FAILURE) {
+                                        if (ret == WEBD_FAILURE || ret == WEBD_COMPLETED) {
                                                 webd_ulog(url, "Closing connection\n");
 
-                                                webd_conn_destroy(conn);
+
+                                                webd_conn_destroy(conn, (ret == WEBD_FAILURE) ? WEBD_CONN_DESTROY_DELETE_FILE : 0);
                                                 closed++;
 
                                                 break;
@@ -304,7 +305,7 @@ void webd_destroy(struct webdownloader *webd)
 
         for (size_t i = 0; i < webd->count; i++)
                 if (!WEBD_OBJ_IS_FREE(webd->conns[i]))
-                        webd_conn_destroy(&webd->conns[i]);
+                        webd_conn_destroy(&webd->conns[i], 0);
 
 
         free(webd->conns);

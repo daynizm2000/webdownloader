@@ -204,11 +204,25 @@ static void webd_conn_init_generate_fname(webd_url_t *urlinfo, char *dest, const
                 }
         }
 
-        // tmp fix
         if (access(dest, F_OK) == 0) {
-                sprintf(dest, "%s%d", dest, rand());
+                struct timespec rawtime;
+                char *sep;
+                char ext_backup[64];
+
+
+                clock_gettime(CLOCK_REALTIME, &rawtime);
+
+
+                sep = strrchr(dest, '.');
+
+                if (!sep)
+                        sep = dest + strlen(dest);
+                else
+                        strcpy(ext_backup, sep);
+
+
+                sprintf(sep, "_%ld%s", rawtime.tv_nsec, (sep) ? ext_backup : "");
         }
-        // tmp fix
 }
 
 
@@ -223,7 +237,7 @@ static webd_errno_t webd_conn_init_setting_by_proto(struct webd_connection *conn
 
                         conn->ops.read = webd_conn_raw_read;
                         conn->ops.write = webd_conn_raw_write;
-                        conn->ops.download = webd_fdownload_splice;
+                        conn->ops.download = webd_fdownload;
 
 
                         break;
@@ -256,7 +270,6 @@ webd_errno_t webd_conn_init(struct webd_connection *conn, webd_conn_init_ctx *in
 {
         char h_full[WEBD_HTTP_HOST_MAXLEN + 1];
         char p_full[WEBD_HTTP_PORT_MAXLEN + 1];
-        char fp_full[WEBD_LINUX_FILE_MAXLEN + 1];
         webd_url_t *urlinfo;
         webd_str_t *url;
 
@@ -297,10 +310,10 @@ webd_errno_t webd_conn_init(struct webd_connection *conn, webd_conn_init_ctx *in
                 goto fail;
 
 
-        webd_conn_init_generate_fname(urlinfo, fp_full, h_full);
+        webd_conn_init_generate_fname(urlinfo, conn->file_name, h_full);
 
 
-        conn->fd = open(fp_full, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        conn->fd = open(conn->file_name, O_WRONLY | O_CREAT | O_TRUNC, 0644);
 
         if (conn->fd < 0)
                 webd_uerr_goto(webd_str_data(*url), fail, "Error opening file for download\n");
@@ -336,6 +349,11 @@ fail:
         if (conn->eventfd >= 0) {
                 close(conn->eventfd);
                 conn->eventfd = -1;
+        }
+
+        if (conn->fd >= 0) {
+                webd_delete_file(conn->file_name);
+                close(conn->fd);
         }
 
 
@@ -430,7 +448,7 @@ webd_errno_t webd_conn_write(struct webd_connection *conn)
 
 
                         if (!write_struct->http_req.header.len)
-                                if (webd_http_request_header_generate(&write_struct->http_req, 0) != WEBD_SUCCESS)
+                                if (webd_http_request_header_generate(&write_struct->http_req) != WEBD_SUCCESS)
                                         webd_uerr_ret(url, WEBD_FAILURE, "Failed to generate HTTP request\n");
 
                         
@@ -528,6 +546,39 @@ static webd_errno_t webd_conn_action(struct webd_connection *conn, webd_action_t
 }
 
 
+static webd_errno_t webd_download_setting_by_read_mode(struct webd_connection *conn)
+{
+        switch ((int)conn->read_struct.http_res.read_mode) {
+                case WEBD_HTTP_MODE_CONTENT_LENGTH: {
+                        conn->downloader.content.len = conn->read_struct.http_res.content_len;
+                        conn->downloader.ops.is_finished = webd_download_is_finished_by_content_len;
+
+
+                        break;
+                }
+                case WEBD_HTTP_MODE_CHUNKED: {
+                        conn->downloader.content.len = 0;
+                        conn->downloader.ops.is_finished = webd_download_is_finished_by_chunked;
+                        conn->downloader.ops.filter_buff = webd_download_filter_buff_by_chunked;
+
+
+                        break;
+
+                }
+                case WEBD_HTTP_MODE_CLOSE_CONNECTION: {
+                        conn->downloader.content.len = 0;
+                        conn->downloader.ops.is_finished = webd_download_is_finished_by_close_conn;
+
+
+                        break;
+                }
+        }
+
+
+        return WEBD_SUCCESS;
+}
+
+
 webd_errno_t webd_conn_read(struct webd_connection *conn)
 {
         const char *url;
@@ -581,27 +632,22 @@ webd_errno_t webd_conn_read(struct webd_connection *conn)
                         }
 
 
-                        conn->downloader.content.len = read_struct->http_res.content_len;
+                        ret = webd_download_setting_by_read_mode(conn);
+
+                        if (ret != WEBD_SUCCESS)
+                                return ret;
 
 
                         ret = conn->ops.download(&conn->downloader);
 
 
-                        // tmp fix
-                        if (ret == WEBD_RECONNECT)
-                                return WEBD_FAILURE;
-                        else if (ret == WEBD_SUCCESS)
-                                return WEBD_FAILURE;
-                        // tmp fix
-
-
                         if (ret == WEBD_SUCCESS)
-                                read_struct->state = WEBD_READ_STATE_READ_RESPONSE;
+                                return WEBD_COMPLETED;
                         else
                                 return ret;
 
 
-                        if (webd_http_request_header_generate(&conn->write_struct.http_req, 0) != WEBD_SUCCESS)
+                        if (webd_http_request_header_generate(&conn->write_struct.http_req) != WEBD_SUCCESS)
                                 webd_uerr_ret(url, WEBD_FAILURE, "Failed to generate HTTP request\n");
 
 
@@ -615,7 +661,7 @@ webd_errno_t webd_conn_read(struct webd_connection *conn)
 }
 
 
-void webd_conn_destroy(struct webd_connection *conn)
+void webd_conn_destroy(struct webd_connection *conn, webd_conn_destroy_flags_t flags)
 {
         if (!conn || WEBD_OBJ_IS_FREE(*conn))
                 return;
@@ -630,8 +676,12 @@ void webd_conn_destroy(struct webd_connection *conn)
         if (conn->sockfd >= 0)
                 close(conn->sockfd);
 
-        if (conn->fd >= 0)
+        if (conn->fd >= 0) {
+                if (flags & WEBD_CONN_DESTROY_DELETE_FILE)
+                        webd_delete_file(conn->file_name);
+                
                 close(conn->fd);
+        }
 
         if (conn->addrinfo)
                 freeaddrinfo(conn->addrinfo);

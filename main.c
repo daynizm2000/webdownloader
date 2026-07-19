@@ -7,9 +7,6 @@ int main(int argc, const char **argv)
         webd_errno_t ret;
 
 
-        srand(time(NULL));
-
-
         if (argc < 2)
                 webd_err_ret(1, "Url not found. Use: %s <url/s>\n", *argv);
 

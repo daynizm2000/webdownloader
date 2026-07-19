@@ -15,6 +15,7 @@ webd_errno_t webd_tls_init(struct webdownloader *webd)
                 webd_err_ret(WEBD_FAILURE, "SSL CTX Object create: memory allocation error\n");
 
 
+        SSL_CTX_set_options(webd->ssl_ctx, SSL_OP_IGNORE_UNEXPECTED_EOF);
         SSL_CTX_set_min_proto_version(webd->ssl_ctx, TLS1_2_VERSION);
         SSL_CTX_set_default_verify_paths(webd->ssl_ctx);
         SSL_CTX_set_verify(webd->ssl_ctx, SSL_VERIFY_NONE, NULL);

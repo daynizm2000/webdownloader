@@ -82,72 +82,6 @@ webd_errno_t webd_http_parse_content_len(webd_http_header_t *head, size_t *dest)
 }
 
 
-webd_errno_t webd_http_parse_content_range(webd_http_header_t *head, webd_http_range_t *dest)
-{
-        webd_http_range_t cap;
-        char *start;
-        char *endptr;
-        size_t range_start;
-        size_t range_end;
-        size_t data_size;
-
-        
-        if (!head)
-                return WEBD_FAILURE;
-
-        if (!dest)
-                dest = &cap;
-
-
-        start = strcasestr(head->data, "\r\ncontent-range:");
-        
-        if (!start)
-                return WEBD_FAILURE;
-
-
-        start += webd_static_strlen("\r\ncontent-range:");
-
-
-        while (*start && isspace(*start))
-                start++;
-
-
-        range_start = strtoull(start, &endptr, 10);
-
-        if (endptr == start || *endptr != '-')
-                return WEBD_FAILURE;
-
-
-        start = endptr + 1;
-
-        
-        range_end = strtoull(start, &endptr, 10);
-
-        if (endptr == start || *endptr != '/')
-                return WEBD_FAILURE;
-
-
-        start = endptr + 1;
-
-
-        data_size = strtoull(start, &endptr, 10);
-
-        if (endptr == start)
-                return WEBD_FAILURE;
-
-
-        if (dest == &cap)
-                return WEBD_SUCCESS;
-
-
-        dest->start = range_start;
-        dest->end = range_end;
-        dest->size = data_size;
-
-
-        return WEBD_SUCCESS;
-}
-
 webd_errno_t webd_http_parse_location(webd_http_header_t *head, webd_str_t *dest)
 {
         webd_str_t cap;
@@ -201,6 +135,51 @@ webd_errno_t webd_http_parse_location(webd_http_header_t *head, webd_str_t *dest
 
         
         webd_str_init(*dest, data, free);
+
+
+        return WEBD_SUCCESS;
+}
+
+
+webd_errno_t webd_http_parse_transfer_encoding(webd_http_header_t *head, webd_strview_t *dest)
+{
+        const char *start;
+        size_t len = 0;
+
+
+        if (!head)
+                return WEBD_FAILURE;
+
+
+        start = strcasestr(head->data, "\r\ntransfer-encoding:");
+
+        if (!start)
+                return WEBD_FAILURE;
+
+
+        start += webd_static_strlen("\r\ntransfer-encoding:");
+
+
+        while (*start && isspace(*start))
+                start++;
+
+
+        while (start[len] && start[len] != '\r')
+                len++;
+
+
+        len--;
+
+
+        if (!len)
+                return WEBD_FAILURE;
+
+
+        if (!dest)
+                return WEBD_SUCCESS;
+
+
+        webd_strview_set(*dest, start, len);
 
 
         return WEBD_SUCCESS;

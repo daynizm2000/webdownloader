@@ -128,9 +128,6 @@
 #define WEBD_LINUX_FILE_PATH_MAXLEN 4096
 
 
-#define WEBD_HTTP_GEN_REQ_RANGE (1 << 0)
-
-
 #define WEBD_OBJ_IS_FREE(obj) ((obj).__free)
 
 
@@ -143,6 +140,12 @@
 #define WEBD_DNS_QUEUE_BUFSIZE 512
 
 
+#define WEBD_CONN_DESTROY_DELETE_FILE (1 << 0)
+
+
+
+typedef uint8_t webd_conn_destroy_flags_t;
+
 
 typedef enum {
         WEBD_SUCCESS,
@@ -151,7 +154,8 @@ typedef enum {
         WEBD_REDIRECT,
         WEBD_EPOLL_ADD,
         WEBD_EPOLL_ADD_BUSY,
-        WEBD_FAILURE
+        WEBD_FAILURE,
+        WEBD_COMPLETED
 } webd_errno_t;
 
 typedef enum {
@@ -190,9 +194,16 @@ typedef enum {
 typedef enum {
         WEBD_HTTP_MODE_CHUNKED,
         WEBD_HTTP_MODE_CONTENT_LENGTH,
-        WEBD_HTTP_MODE_CONTENT_RANGE,
         WEBD_HTTP_MODE_CLOSE_CONNECTION
 } webd_http_read_mode_t;
+
+typedef enum {
+        WEBD_DOWNLOAD_OPS_SUCCESS,
+        WEBD_DOWNLOAD_OPS_FAILURE,
+        WEBD_DOWNLOAD_LOOP_CONTINUE,
+        WEBD_DOWNLOAD_LOOP_BREAK,
+        WEBD_DOWNLOAD_LOOP_PROCESS,
+} webd_download_ops_status_t;
 
 
 typedef struct {
@@ -323,27 +334,41 @@ typedef struct {
         webd_queue_t *dns_queue;
 } webd_conn_init_ctx;
 
+typedef struct {
+        char hex_buff[16 + 1]; // + 1 for \0
+        size_t bufflen;
+} webd_http_chunked_t;
+
 
 
 struct webd_file_downloader {
-        union {
-                int pipefds[2];
-                char buffer[WEBD_FDOWNL_BUFSIZE];
-        };
+        char buffer[WEBD_FDOWNL_BUFSIZE];
+
 
         struct webd_connection *conn;
+
 
         struct {
                 size_t len;
                 size_t pos;
         } content;
 
-        size_t fpos;
 
         struct {
                 size_t read_bytes;
                 size_t written;
         } chunk;
+
+
+        struct {
+                webd_download_ops_status_t (*filter_buff)(struct webd_file_downloader*, void*);
+                webd_download_ops_status_t (*is_finished)(struct webd_file_downloader*, ssize_t *last_read_res);
+        } ops;
+
+
+        union {
+                webd_http_chunked_t chunked;
+        } ctx;
 
 
         int __free;
@@ -377,6 +402,9 @@ struct webd_connection {
 
 
         webd_conn_tls_t tls;
+
+
+        char file_name[WEBD_LINUX_FILE_MAXLEN + 1];
 
 
         int __free;
@@ -422,7 +450,7 @@ webd_errno_t webd_conn_reconnect(struct webdownloader *webd, struct webd_connect
 webd_errno_t webd_conn_step(struct webd_connection *conn);
 webd_errno_t webd_conn_write(struct webd_connection *conn);
 webd_errno_t webd_conn_read(struct webd_connection *conn);
-void webd_conn_destroy(struct webd_connection *conn);
+void webd_conn_destroy(struct webd_connection *conn, webd_conn_destroy_flags_t flags);
 
 
 
@@ -438,17 +466,19 @@ void webd_http_response_init(webd_http_response_t *res);
 void webd_http_request_destroy(webd_http_request_t *req);
 void webd_http_response_destroy(webd_http_response_t *res);
 
-webd_errno_t webd_http_request_header_generate(webd_http_request_t *req, uint8_t flags);
+webd_errno_t webd_http_request_header_generate(webd_http_request_t *req);
 webd_errno_t webd_http_response_parse(webd_http_response_t *res);
 webd_action_t webd_http_action_select(int status);
+
+webd_errno_t webd_http_chunked_buff_parse(webd_http_chunked_t *ctx, unsigned char *buff, size_t *bufflen);
 
 
 
 // parser.c
 webd_errno_t webd_http_parse_status(webd_http_header_t *head, int *dest);
 webd_errno_t webd_http_parse_content_len(webd_http_header_t *head, size_t *dest);
-webd_errno_t webd_http_parse_content_range(webd_http_header_t *head, webd_http_range_t *dest);
 webd_errno_t webd_http_parse_location(webd_http_header_t *head, webd_str_t *dest);
+webd_errno_t webd_http_parse_transfer_encoding(webd_http_header_t *head, webd_strview_t *dest);
 
 
 
@@ -456,7 +486,6 @@ webd_errno_t webd_http_parse_location(webd_http_header_t *head, webd_str_t *dest
 webd_errno_t webd_fdownl_init(struct webd_file_downloader *webdf, struct webd_connection *conn);
 webd_errno_t webd_fdownl_remainder_read(struct webd_file_downloader *webdf);
 webd_errno_t webd_fdownload(struct webd_file_downloader *webdf);
-webd_errno_t webd_fdownload_splice(struct webd_file_downloader *webdf);
 void webd_fdownl_destroy(struct webd_file_downloader *webdf);
 
 
@@ -489,3 +518,8 @@ void webd_dns_destroy(struct webdownloader *webd);
 
 // utils.c
 void webd_fd_set_nonblock(int fd);
+void webd_delete_file(const char *path);
+webd_download_ops_status_t webd_download_is_finished_by_content_len(struct webd_file_downloader *webdf, ssize_t *last_read_res);
+webd_download_ops_status_t webd_download_is_finished_by_close_conn(struct webd_file_downloader *webdf, ssize_t *last_read_res);
+webd_download_ops_status_t webd_download_is_finished_by_chunked(struct webd_file_downloader *webdf, ssize_t *last_read_res);
+webd_download_ops_status_t webd_download_filter_buff_by_chunked(struct webd_file_downloader *webdf, void *arg);
